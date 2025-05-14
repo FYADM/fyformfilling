@@ -1,7 +1,12 @@
-// Initialize EmailJS
-emailjs.init("user_abc123xyz"); // Replace "user_abc123xyz" with your EmailJS User ID
+emailjs.init("yabsBn7Krs4T7dc_W");
 
-// Pricing Calculator (Student Pricing)
+function generateSubmissionId() {
+  return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+    const r = Math.random() * 16 | 0, v = c === 'x' ? r : (r & 0x3 | 0x8);
+    return v.toString(16);
+  });
+}
+
 function calculatePrice() {
   const collegesInput = document.getElementById("colleges").value;
   const coursesInput = document.getElementById("courses").value;
@@ -10,17 +15,17 @@ function calculatePrice() {
 
   let totalCost = 0;
   if (colleges >= 1) {
-    totalCost += 500; // Base: pre-enrollment + 1 college (1 course)
+    totalCost += 500;
     const firstCollegeCourses = coursesPerCollege[0] || 1;
     if (firstCollegeCourses > 1) {
-      totalCost += (firstCollegeCourses - 1) * 100; // Additional courses in first college
+      totalCost += (firstCollegeCourses - 1) * 100;
     }
   }
   for (let i = 1; i < colleges; i++) {
-    totalCost += 500; // New college (1 course)
+    totalCost += 500;
     const courses = coursesPerCollege[i] || 1;
     if (courses > 1) {
-      totalCost += (courses - 1) * 100; // Additional courses in this college
+      totalCost += (courses - 1) * 100;
     }
   }
 
@@ -28,13 +33,16 @@ function calculatePrice() {
   return totalCost;
 }
 
-// Form Submission
-document.getElementById("admissionForm").addEventListener("submit", function(event) {
+document.getElementById("colleges").addEventListener("input", calculatePrice);
+document.getElementById("courses").addEventListener("input", calculatePrice);
+
+document.getElementById("admissionForm").addEventListener("submit", async function(event) {
   event.preventDefault();
 
-  // Collect form data
   const formData = new FormData(this);
+  const submissionId = generateSubmissionId();
   const data = {
+    submissionId: submissionId,
     name: formData.get("name"),
     email: formData.get("email"),
     phone: formData.get("phone"),
@@ -42,57 +50,75 @@ document.getElementById("admissionForm").addEventListener("submit", function(eve
     colleges: formData.get("colleges"),
     courses: formData.get("courses"),
     collegeDetails: formData.get("collegeDetails"),
-    totalCost: calculatePrice()
+    totalCost: calculatePrice(),
+    totalForms: 0,
+    documents: "",
+    paymentStatus: "Pending",
+    paymentId: "",
+    paymentError: ""
   };
 
-  // Calculate number of forms for staff remuneration (not displayed)
   const colleges = parseInt(data.colleges) || 1;
   const coursesPerCollege = data.courses.split(",").map(num => parseInt(num.trim()) || 1);
-  let totalForms = 1; // Pre-enrollment form
-  coursesPerCollege.forEach(courses => totalForms += courses); // Add courses for each college
+  let totalForms = 1;
+  coursesPerCollege.forEach(courses => totalForms += courses);
   data.totalForms = totalForms;
 
-  // Handle file uploads (log file names; in production, upload to Google Drive)
   const files = formData.getAll("documents");
   const fileNames = files.map(file => file.name).join(", ");
   data.documents = fileNames;
 
-  // Send data to backend team via EmailJS
-  emailjs.send("service_xxxxxx", "template_yyyyyy", data) // Replace "service_xxxxxx" with your EmailJS Service ID, "template_yyyyyy" with your EmailJS Template ID
-    .then(() => {
-      alert("Form submitted successfully! Proceed to payment.");
-      initiatePayment(data);
-    })
-    .catch(error => {
-      alert("Error submitting form: " + error);
+  try {
+    const googleScriptUrl = "https://script.google.com/macros/s/AKfycbweGRe_gXXE1x_KgAnt9A6H5M2QkOk5jkYqQQP7pSgmO10a3lp335cgCdt4g7vMGkC7/exec";
+    const sheetResponse = await fetch(googleScriptUrl, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({ action: "append", data: data }),
+      mode: 'cors',
+      redirect: 'follow'
     });
-});
 
-// Razorpay Payment Integration
-function initiatePayment(data) {
-  const options = {
-    key: "rzp_test_abc123xyz", // Replace "rzp_test_abc123xyz" with your Razorpay Key ID
-    amount: data.totalCost * 100, // Convert to paise
-    currency: "INR",
-    name: "FY Admission Service",
-    description: "Form Filling Service",
-    handler: function(response) {
-      alert("Payment successful! Transaction ID: " + response.razorpay_payment_id);
-      // Send payment confirmation to team
-      emailjs.send("service_xxxxxx", "template_yyyyyy", { // Replace "service_xxxxxx" with your EmailJS Service ID, "template_yyyyyy" with your EmailJS Template ID
-        ...data,
-        payment_id: response.razorpay_payment_id
-      });
-    },
-    prefill: {
-      name: data.name,
-      email: data.email,
-      contact: data.phone
-    },
-    theme: {
-      color: "#2563EB"
+    if (!sheetResponse.ok) {
+      throw new Error("Failed to send data to Google Sheet");
     }
-  };
-  const rzp = new Razorpay(options);
-  rzp.open();
-}
+
+    const sheetResult = await sheetResponse.json();
+    if (!sheetResult.success) {
+      throw new Error(sheetResult.error || "Failed to save data");
+    }
+
+    await emailjs.send("service_xm4j16t", "template_05pkln8", data);
+
+    const paymentResponse = await fetch("/.netlify/functions/create-payment-link", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+      },
+      body: JSON.stringify({
+        amount: data.totalCost,
+        description: `Admission Form for ${data.name} (ID: ${submissionId})`,
+        name: data.name,
+        email: data.email,
+        phone: data.phone,
+        reference_id: submissionId
+      }),
+    });
+
+    if (!paymentResponse.ok) {
+      throw new Error("Failed to create payment link");
+    }
+
+    const paymentData = await paymentResponse.json();
+    if (paymentData.paymentLink) {
+      window.location.href = paymentData.paymentLink;
+    } else {
+      throw new Error("No payment link received");
+    }
+
+    alert("Form submitted! You will be redirected to payment.");
+  } catch (error) {
+    alert("Error: " + error.message + ". Please try again or contact support.");
+  }
+});
